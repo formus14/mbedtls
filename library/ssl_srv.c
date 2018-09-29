@@ -938,7 +938,7 @@ static int ssl_parse_client_hello_v2( mbedtls_ssl_context *ssl )
     }
 #endif /* MBEDTLS_SSL_RENEGOTIATION */
 
-    buf = ssl->in_hdr;
+    buf = ssl->in.hdr;
 
     MBEDTLS_SSL_DEBUG_BUF( 4, "record header", buf, 5 );
 
@@ -1001,8 +1001,8 @@ static int ssl_parse_client_hello_v2( mbedtls_ssl_context *ssl )
 
     ssl->handshake->update_checksum( ssl, buf + 2, n );
 
-    buf = ssl->in_msg;
-    n = ssl->in_left - 5;
+    buf = ssl->in.msg;
+    n = ssl->in.left - 5;
 
     /*
      *    0  .   1   ciphersuitelist length
@@ -1169,7 +1169,7 @@ have_ciphersuite_v2:
         return( MBEDTLS_ERR_SSL_BAD_HS_CLIENT_HELLO );
     }
 
-    ssl->in_left = 0;
+    ssl->in.left = 0;
     ssl->state++;
 
     MBEDTLS_SSL_DEBUG_MSG( 2, ( "<= parse client hello v2" ) );
@@ -1230,7 +1230,7 @@ read_record_header:
         }
     }
 
-    buf = ssl->in_hdr;
+    buf = ssl->in.hdr;
 
 #if defined(MBEDTLS_SSL_SRV_SUPPORT_SSLV2_CLIENT_HELLO)
 #if defined(MBEDTLS_SSL_PROTO_DTLS)
@@ -1261,7 +1261,7 @@ read_record_header:
     }
 
     MBEDTLS_SSL_DEBUG_MSG( 3, ( "client hello v3, message len.: %d",
-                   ( ssl->in_len[0] << 8 ) | ssl->in_len[1] ) );
+                   ( ssl->in.len[0] << 8 ) | ssl->in.len[1] ) );
 
     MBEDTLS_SSL_DEBUG_MSG( 3, ( "client hello v3, protocol version: [%d:%d]",
                    buf[1], buf[2] ) );
@@ -1278,6 +1278,10 @@ read_record_header:
         return( MBEDTLS_ERR_SSL_BAD_HS_CLIENT_HELLO );
     }
 
+    ret = mbedtls_ssl_confirm_content_len( ssl, &ssl->out, MBEDTLS_SSL_BUFFER_MIN);
+    if( ret )
+        return( ret );
+
     /* For DTLS if this is the initial handshake, remember the client sequence
      * number to use it in our next message (RFC 6347 4.2.1) */
 #if defined(MBEDTLS_SSL_PROTO_DTLS)
@@ -1288,20 +1292,20 @@ read_record_header:
         )
     {
         /* Epoch should be 0 for initial handshakes */
-        if( ssl->in_ctr[0] != 0 || ssl->in_ctr[1] != 0 )
+        if( ssl->in.ctr[0] != 0 || ssl->in.ctr[1] != 0 )
         {
             MBEDTLS_SSL_DEBUG_MSG( 1, ( "bad client hello message" ) );
             return( MBEDTLS_ERR_SSL_BAD_HS_CLIENT_HELLO );
         }
 
-        memcpy( ssl->out_ctr + 2, ssl->in_ctr + 2, 6 );
+        memcpy( ssl->out.ctr + 2, ssl->in.ctr + 2, 6 );
 
 #if defined(MBEDTLS_SSL_DTLS_ANTI_REPLAY)
         if( mbedtls_ssl_dtls_replay_check( ssl ) != 0 )
         {
             MBEDTLS_SSL_DEBUG_MSG( 1, ( "replayed record, discarding" ) );
             ssl->next_record_offset = 0;
-            ssl->in_left = 0;
+            ssl->in.left = 0;
             goto read_record_header;
         }
 
@@ -1311,7 +1315,7 @@ read_record_header:
     }
 #endif /* MBEDTLS_SSL_PROTO_DTLS */
 
-    msg_len = ( ssl->in_len[0] << 8 ) | ssl->in_len[1];
+    msg_len = ( ssl->in.len[0] << 8 ) | ssl->in.len[1];
 
 #if defined(MBEDTLS_SSL_RENEGOTIATION)
     if( ssl->renego_status != MBEDTLS_SSL_INITIAL_HANDSHAKE )
@@ -1322,7 +1326,7 @@ read_record_header:
     else
 #endif
     {
-        if( msg_len > MBEDTLS_SSL_IN_CONTENT_LEN )
+        if( msg_len > ssl->in.max_content_len )
         {
             MBEDTLS_SSL_DEBUG_MSG( 1, ( "bad client hello message" ) );
             return( MBEDTLS_ERR_SSL_BAD_HS_CLIENT_HELLO );
@@ -1341,10 +1345,10 @@ read_record_header:
             ssl->next_record_offset = msg_len + mbedtls_ssl_hdr_len( ssl );
         else
 #endif
-            ssl->in_left = 0;
+            ssl->in.left = 0;
     }
 
-    buf = ssl->in_msg;
+    buf = ssl->in.msg;
 
     MBEDTLS_SSL_DEBUG_BUF( 4, "record contents", buf, msg_len );
 
@@ -1394,8 +1398,8 @@ read_record_header:
         if( ssl->renego_status == MBEDTLS_SSL_RENEGOTIATION_IN_PROGRESS )
         {
             /* This couldn't be done in ssl_prepare_handshake_record() */
-            unsigned int cli_msg_seq = ( ssl->in_msg[4] << 8 ) |
-                                         ssl->in_msg[5];
+            unsigned int cli_msg_seq = ( ssl->in.msg[4] << 8 ) |
+                                         ssl->in.msg[5];
 
             if( cli_msg_seq != ssl->handshake->in_msg_seq )
             {
@@ -1410,8 +1414,8 @@ read_record_header:
         else
 #endif
         {
-            unsigned int cli_msg_seq = ( ssl->in_msg[4] << 8 ) |
-                                         ssl->in_msg[5];
+            unsigned int cli_msg_seq = ( ssl->in.msg[4] << 8 ) |
+                                         ssl->in.msg[5];
             ssl->handshake->out_msg_seq = cli_msg_seq;
             ssl->handshake->in_msg_seq  = cli_msg_seq + 1;
         }
@@ -1420,8 +1424,8 @@ read_record_header:
          * For now we don't support fragmentation, so make sure
          * fragment_offset == 0 and fragment_length == length
          */
-        if( ssl->in_msg[6] != 0 || ssl->in_msg[7] != 0 || ssl->in_msg[8] != 0 ||
-            memcmp( ssl->in_msg + 1, ssl->in_msg + 9, 3 ) != 0 )
+        if( ssl->in.msg[6] != 0 || ssl->in.msg[7] != 0 || ssl->in.msg[8] != 0 ||
+            memcmp( ssl->in.msg + 1, ssl->in.msg + 9, 3 ) != 0 )
         {
             MBEDTLS_SSL_DEBUG_MSG( 1, ( "ClientHello fragmentation not supported" ) );
             return( MBEDTLS_ERR_SSL_FEATURE_UNAVAILABLE );
@@ -2260,7 +2264,7 @@ static void ssl_write_ecjpake_kkpp_ext( mbedtls_ssl_context *ssl,
 {
     int ret;
     unsigned char *p = buf;
-    const unsigned char *end = ssl->out_msg + MBEDTLS_SSL_OUT_CONTENT_LEN;
+    const unsigned char *end = ssl->out.msg + ssl->out.max_content_len;
     size_t kkpp_len;
 
     *olen = 0;
@@ -2337,7 +2341,7 @@ static void ssl_write_alpn_ext( mbedtls_ssl_context *ssl,
 static int ssl_write_hello_verify_request( mbedtls_ssl_context *ssl )
 {
     int ret;
-    unsigned char *p = ssl->out_msg + 4;
+    unsigned char *p = ssl->out.msg + 4;
     unsigned char *cookie_len_byte;
 
     MBEDTLS_SSL_DEBUG_MSG( 2, ( "=> write hello verify request" ) );
@@ -2367,7 +2371,8 @@ static int ssl_write_hello_verify_request( mbedtls_ssl_context *ssl )
     cookie_len_byte = p++;
 
     if( ( ret = ssl->conf->f_cookie_write( ssl->conf->p_cookie,
-                                     &p, ssl->out_buf + MBEDTLS_SSL_OUT_BUFFER_LEN,
+                                     &p, ssl->out.buf + ssl->out.max_content_len +
+                                        MBEDTLS_SSL_BUFFER_OVERHEAD,
                                      ssl->cli_id, ssl->cli_id_len ) ) != 0 )
     {
         MBEDTLS_SSL_DEBUG_RET( 1, "f_cookie_write", ret );
@@ -2378,9 +2383,9 @@ static int ssl_write_hello_verify_request( mbedtls_ssl_context *ssl )
 
     MBEDTLS_SSL_DEBUG_BUF( 3, "cookie sent", cookie_len_byte + 1, *cookie_len_byte );
 
-    ssl->out_msglen  = p - ssl->out_msg;
-    ssl->out_msgtype = MBEDTLS_SSL_MSG_HANDSHAKE;
-    ssl->out_msg[0]  = MBEDTLS_SSL_HS_HELLO_VERIFY_REQUEST;
+    ssl->out.msglen  = p - ssl->out.msg;
+    ssl->out.msgtype = MBEDTLS_SSL_MSG_HANDSHAKE;
+    ssl->out.msg[0]  = MBEDTLS_SSL_HS_HELLO_VERIFY_REQUEST;
 
     ssl->state = MBEDTLS_SSL_SERVER_HELLO_VERIFY_REQUEST_SENT;
 
@@ -2404,6 +2409,10 @@ static int ssl_write_server_hello( mbedtls_ssl_context *ssl )
     int ret;
     size_t olen, ext_len = 0, n;
     unsigned char *buf, *p;
+
+    ret = mbedtls_ssl_confirm_content_len( ssl, &ssl->out, MBEDTLS_SSL_BUFFER_MIN + 1024 );
+    if( ret )
+        return( ret );
 
     MBEDTLS_SSL_DEBUG_MSG( 2, ( "=> write server hello" ) );
 
@@ -2431,7 +2440,7 @@ static int ssl_write_server_hello( mbedtls_ssl_context *ssl )
      *     6  .   9   UNIX time()
      *    10  .  37   random bytes
      */
-    buf = ssl->out_msg;
+    buf = ssl->out.msg;
     p = buf + 4;
 
     mbedtls_ssl_write_version( ssl->major_ver, ssl->minor_ver,
@@ -2616,9 +2625,9 @@ static int ssl_write_server_hello( mbedtls_ssl_context *ssl )
     }
 #endif
 
-    ssl->out_msglen  = p - buf;
-    ssl->out_msgtype = MBEDTLS_SSL_MSG_HANDSHAKE;
-    ssl->out_msg[0]  = MBEDTLS_SSL_HS_SERVER_HELLO;
+    ssl->out.msglen  = p - buf;
+    ssl->out.msgtype = MBEDTLS_SSL_MSG_HANDSHAKE;
+    ssl->out.msg[0]  = MBEDTLS_SSL_HS_SERVER_HELLO;
 
     ret = mbedtls_ssl_write_record( ssl );
 
@@ -2663,7 +2672,7 @@ static int ssl_write_certificate_request( mbedtls_ssl_context *ssl )
     size_t dn_size, total_dn_size; /* excluding length bytes */
     size_t ct_len, sa_len; /* including length bytes */
     unsigned char *buf, *p;
-    const unsigned char * const end = ssl->out_msg + MBEDTLS_SSL_OUT_CONTENT_LEN;
+    const unsigned char * const end = ssl->out.msg + ssl->out.max_content_len;
     const mbedtls_x509_crt *crt;
     int authmode;
 
@@ -2701,7 +2710,7 @@ static int ssl_write_certificate_request( mbedtls_ssl_context *ssl )
      *    n+4 .. ...  Distinguished Name #1
      *    ... .. ...  length of DN 2, etc.
      */
-    buf = ssl->out_msg;
+    buf = ssl->out.msg;
     p = buf + 4;
 
     /*
@@ -2809,11 +2818,11 @@ static int ssl_write_certificate_request( mbedtls_ssl_context *ssl )
         }
     }
 
-    ssl->out_msglen  = p - buf;
-    ssl->out_msgtype = MBEDTLS_SSL_MSG_HANDSHAKE;
-    ssl->out_msg[0]  = MBEDTLS_SSL_HS_CERTIFICATE_REQUEST;
-    ssl->out_msg[4 + ct_len + sa_len] = (unsigned char)( total_dn_size  >> 8 );
-    ssl->out_msg[5 + ct_len + sa_len] = (unsigned char)( total_dn_size       );
+    ssl->out.msglen  = p - buf;
+    ssl->out.msgtype = MBEDTLS_SSL_MSG_HANDSHAKE;
+    ssl->out.msg[0]  = MBEDTLS_SSL_HS_CERTIFICATE_REQUEST;
+    ssl->out.msg[4 + ct_len + sa_len] = (unsigned char)( total_dn_size  >> 8 );
+    ssl->out.msg[5 + ct_len + sa_len] = (unsigned char)( total_dn_size       );
 
     ret = mbedtls_ssl_write_record( ssl );
 
@@ -2858,13 +2867,13 @@ static int ssl_get_ecdh_params_from_cert( mbedtls_ssl_context *ssl )
 static int ssl_resume_server_key_exchange( mbedtls_ssl_context *ssl,
                                            size_t *signature_len )
 {
-    /* Append the signature to ssl->out_msg, leaving 2 bytes for the
+    /* Append the signature to ssl->out.msg, leaving 2 bytes for the
      * signature length which will be added in ssl_write_server_key_exchange
      * after the call to ssl_prepare_server_key_exchange.
      * ssl_write_server_key_exchange also takes care of incrementing
-     * ssl->out_msglen. */
-    unsigned char *sig_start = ssl->out_msg + ssl->out_msglen + 2;
-    size_t sig_max_len = ( ssl->out_buf + MBEDTLS_SSL_OUT_CONTENT_LEN
+     * ssl->out.msglen. */
+    unsigned char *sig_start = ssl->out.msg + ssl->out.msglen + 2;
+    size_t sig_max_len = ( ssl->out.buf + ssl->out.max_content_len
                            - sig_start );
     int ret = ssl->conf->f_async_resume( ssl,
                                          sig_start, signature_len, sig_max_len );
@@ -2898,7 +2907,7 @@ static int ssl_prepare_server_key_exchange( mbedtls_ssl_context *ssl,
     (void) signature_len;
 #endif /* MBEDTLS_KEY_EXCHANGE__WITH_SERVER_SIGNATURE__ENABLED */
 
-    ssl->out_msglen = 4; /* header (type:1, length:3) to be written later */
+    ssl->out.msglen = 4; /* header (type:1, length:3) to be written later */
 
     /*
      *
@@ -2917,8 +2926,8 @@ static int ssl_prepare_server_key_exchange( mbedtls_ssl_context *ssl,
 
         ret = mbedtls_ecjpake_write_round_two(
             &ssl->handshake->ecjpake_ctx,
-            ssl->out_msg + ssl->out_msglen,
-            MBEDTLS_SSL_OUT_CONTENT_LEN - ssl->out_msglen, &len,
+            ssl->out.msg + ssl->out.msglen,
+            ssl->out.max_content_len - ssl->out.msglen, &len,
             ssl->conf->f_rng, ssl->conf->p_rng );
         if( ret != 0 )
         {
@@ -2926,7 +2935,7 @@ static int ssl_prepare_server_key_exchange( mbedtls_ssl_context *ssl,
             return( ret );
         }
 
-        ssl->out_msglen += len;
+        ssl->out.msglen += len;
     }
 #endif /* MBEDTLS_KEY_EXCHANGE_ECJPAKE_ENABLED */
 
@@ -2940,8 +2949,8 @@ static int ssl_prepare_server_key_exchange( mbedtls_ssl_context *ssl,
     if( ciphersuite_info->key_exchange == MBEDTLS_KEY_EXCHANGE_DHE_PSK ||
         ciphersuite_info->key_exchange == MBEDTLS_KEY_EXCHANGE_ECDHE_PSK )
     {
-        ssl->out_msg[ssl->out_msglen++] = 0x00;
-        ssl->out_msg[ssl->out_msglen++] = 0x00;
+        ssl->out.msg[ssl->out.msglen++] = 0x00;
+        ssl->out.msg[ssl->out.msglen++] = 0x00;
     }
 #endif /* MBEDTLS_KEY_EXCHANGE_DHE_PSK_ENABLED ||
           MBEDTLS_KEY_EXCHANGE_ECDHE_PSK_ENABLED */
@@ -2981,7 +2990,7 @@ static int ssl_prepare_server_key_exchange( mbedtls_ssl_context *ssl,
         if( ( ret = mbedtls_dhm_make_params(
                   &ssl->handshake->dhm_ctx,
                   (int) mbedtls_mpi_size( &ssl->handshake->dhm_ctx.P ),
-                  ssl->out_msg + ssl->out_msglen, &len,
+                  ssl->out.msg + ssl->out.msglen, &len,
                   ssl->conf->f_rng, ssl->conf->p_rng ) ) != 0 )
         {
             MBEDTLS_SSL_DEBUG_RET( 1, "mbedtls_dhm_make_params", ret );
@@ -2989,10 +2998,10 @@ static int ssl_prepare_server_key_exchange( mbedtls_ssl_context *ssl,
         }
 
 #if defined(MBEDTLS_KEY_EXCHANGE__WITH_SERVER_SIGNATURE__ENABLED)
-        dig_signed = ssl->out_msg + ssl->out_msglen;
+        dig_signed = ssl->out.msg + ssl->out.msglen;
 #endif
 
-        ssl->out_msglen += len;
+        ssl->out.msglen += len;
 
         MBEDTLS_SSL_DEBUG_MPI( 3, "DHM: X ", &ssl->handshake->dhm_ctx.X  );
         MBEDTLS_SSL_DEBUG_MPI( 3, "DHM: P ", &ssl->handshake->dhm_ctx.P  );
@@ -3044,8 +3053,8 @@ curve_matching_done:
 
         if( ( ret = mbedtls_ecdh_make_params(
                   &ssl->handshake->ecdh_ctx, &len,
-                  ssl->out_msg + ssl->out_msglen,
-                  MBEDTLS_SSL_OUT_CONTENT_LEN - ssl->out_msglen,
+                  ssl->out.msg + ssl->out.msglen,
+                  ssl->out.max_content_len - ssl->out.msglen,
                   ssl->conf->f_rng, ssl->conf->p_rng ) ) != 0 )
         {
             MBEDTLS_SSL_DEBUG_RET( 1, "mbedtls_ecdh_make_params", ret );
@@ -3053,10 +3062,10 @@ curve_matching_done:
         }
 
 #if defined(MBEDTLS_KEY_EXCHANGE__WITH_SERVER_SIGNATURE__ENABLED)
-        dig_signed = ssl->out_msg + ssl->out_msglen;
+        dig_signed = ssl->out.msg + ssl->out.msglen;
 #endif
 
-        ssl->out_msglen += len;
+        ssl->out.msglen += len;
 
         MBEDTLS_SSL_DEBUG_ECP( 3, "ECDH: Q ", &ssl->handshake->ecdh_ctx.Q );
     }
@@ -3071,7 +3080,7 @@ curve_matching_done:
 #if defined(MBEDTLS_KEY_EXCHANGE__WITH_SERVER_SIGNATURE__ENABLED)
     if( mbedtls_ssl_ciphersuite_uses_server_signature( ciphersuite_info ) )
     {
-        size_t dig_signed_len = ssl->out_msg + ssl->out_msglen - dig_signed;
+        size_t dig_signed_len = ssl->out.msg + ssl->out.msglen - dig_signed;
         size_t hashlen = 0;
         unsigned char hash[MBEDTLS_MD_MAX_SIZE];
         int ret;
@@ -3183,9 +3192,9 @@ curve_matching_done:
              *
              */
 
-            ssl->out_msg[ssl->out_msglen++] =
+            ssl->out.msg[ssl->out.msglen++] =
                 mbedtls_ssl_hash_from_md_alg( md_alg );
-            ssl->out_msg[ssl->out_msglen++] =
+            ssl->out.msg[ssl->out.msglen++] =
                 mbedtls_ssl_sig_from_pk_alg( sig_alg );
         }
 #endif /* MBEDTLS_SSL_PROTO_TLS1_2 */
@@ -3220,14 +3229,21 @@ curve_matching_done:
             return( MBEDTLS_ERR_SSL_PRIVATE_KEY_REQUIRED );
         }
 
-        /* Append the signature to ssl->out_msg, leaving 2 bytes for the
+            
+        /* Append the signature to ssl->out.msg, leaving 2 bytes for the
          * signature length which will be added in ssl_write_server_key_exchange
          * after the call to ssl_prepare_server_key_exchange.
          * ssl_write_server_key_exchange also takes care of incrementing
-         * ssl->out_msglen. */
+         * ssl->out.msglen. */
+        ret = mbedtls_ssl_confirm_content_len( ssl, &ssl->out,
+                                               (size_t)( ssl->out.msg - ssl->out.buf + ssl->out.msglen
+                                                + 4 + mbedtls_pk_get_len( mbedtls_ssl_own_key( ssl ) ) ) );
+        if( ret )
+            return( ret );
+            
         if( ( ret = mbedtls_pk_sign( mbedtls_ssl_own_key( ssl ),
                                      md_alg, hash, hashlen,
-                                     ssl->out_msg + ssl->out_msglen + 2,
+                                     ssl->out.msg + ssl->out.msglen + 2,
                                      signature_len,
                                      ssl->conf->f_rng,
                                      ssl->conf->p_rng ) ) != 0 )
@@ -3297,14 +3313,14 @@ static int ssl_write_server_key_exchange( mbedtls_ssl_context *ssl )
 
     if( ret != 0 )
     {
-        /* If we're starting to write a new message, set ssl->out_msglen
+        /* If we're starting to write a new message, set ssl->out.msglen
          * to 0. But if we're resuming after an asynchronous message,
          * out_msglen is the amount of data written so far and mst be
          * preserved. */
         if( ret == MBEDTLS_ERR_SSL_ASYNC_IN_PROGRESS )
             MBEDTLS_SSL_DEBUG_MSG( 2, ( "<= write server key exchange (pending)" ) );
         else
-            ssl->out_msglen = 0;
+            ssl->out.msglen = 0;
         return( ret );
     }
 
@@ -3314,21 +3330,21 @@ static int ssl_write_server_key_exchange( mbedtls_ssl_context *ssl )
 #if defined(MBEDTLS_KEY_EXCHANGE__WITH_SERVER_SIGNATURE__ENABLED)
     if( signature_len != 0 )
     {
-        ssl->out_msg[ssl->out_msglen++] = (unsigned char)( signature_len >> 8 );
-        ssl->out_msg[ssl->out_msglen++] = (unsigned char)( signature_len      );
+        ssl->out.msg[ssl->out.msglen++] = (unsigned char)( signature_len >> 8 );
+        ssl->out.msg[ssl->out.msglen++] = (unsigned char)( signature_len      );
 
         MBEDTLS_SSL_DEBUG_BUF( 3, "my signature",
-                               ssl->out_msg + ssl->out_msglen,
+                               ssl->out.msg + ssl->out.msglen,
                                signature_len );
 
         /* Skip over the already-written signature */
-        ssl->out_msglen += signature_len;
+        ssl->out.msglen += signature_len;
     }
 #endif /* MBEDTLS_KEY_EXCHANGE__WITH_SERVER_SIGNATURE__ENABLED */
 
     /* Add header and send. */
-    ssl->out_msgtype = MBEDTLS_SSL_MSG_HANDSHAKE;
-    ssl->out_msg[0]  = MBEDTLS_SSL_HS_SERVER_KEY_EXCHANGE;
+    ssl->out.msgtype = MBEDTLS_SSL_MSG_HANDSHAKE;
+    ssl->out.msg[0]  = MBEDTLS_SSL_HS_SERVER_KEY_EXCHANGE;
 
     ssl->state++;
 
@@ -3348,9 +3364,9 @@ static int ssl_write_server_hello_done( mbedtls_ssl_context *ssl )
 
     MBEDTLS_SSL_DEBUG_MSG( 2, ( "=> write server hello done" ) );
 
-    ssl->out_msglen  = 4;
-    ssl->out_msgtype = MBEDTLS_SSL_MSG_HANDSHAKE;
-    ssl->out_msg[0]  = MBEDTLS_SSL_HS_SERVER_HELLO_DONE;
+    ssl->out.msglen  = 4;
+    ssl->out.msgtype = MBEDTLS_SSL_MSG_HANDSHAKE;
+    ssl->out.msg[0]  = MBEDTLS_SSL_HS_SERVER_HELLO_DONE;
 
     ssl->state++;
 
@@ -3712,16 +3728,16 @@ static int ssl_parse_client_key_exchange( mbedtls_ssl_context *ssl )
         return( ret );
     }
 
-    p = ssl->in_msg + mbedtls_ssl_hs_hdr_len( ssl );
-    end = ssl->in_msg + ssl->in_hslen;
+    p = ssl->in.msg + mbedtls_ssl_hs_hdr_len( ssl );
+    end = ssl->in.msg + ssl->in_hslen;
 
-    if( ssl->in_msgtype != MBEDTLS_SSL_MSG_HANDSHAKE )
+    if( ssl->in.msgtype != MBEDTLS_SSL_MSG_HANDSHAKE )
     {
         MBEDTLS_SSL_DEBUG_MSG( 1, ( "bad client key exchange message" ) );
         return( MBEDTLS_ERR_SSL_BAD_HS_CLIENT_KEY_EXCHANGE );
     }
 
-    if( ssl->in_msg[0] != MBEDTLS_SSL_HS_CLIENT_KEY_EXCHANGE )
+    if( ssl->in.msg[0] != MBEDTLS_SSL_HS_CLIENT_KEY_EXCHANGE )
     {
         MBEDTLS_SSL_DEBUG_MSG( 1, ( "bad client key exchange message" ) );
         return( MBEDTLS_ERR_SSL_BAD_HS_CLIENT_KEY_EXCHANGE );
@@ -4041,8 +4057,8 @@ static int ssl_parse_certificate_verify( mbedtls_ssl_context *ssl )
     ssl->state++;
 
     /* Process the message contents */
-    if( ssl->in_msgtype != MBEDTLS_SSL_MSG_HANDSHAKE ||
-        ssl->in_msg[0] != MBEDTLS_SSL_HS_CERTIFICATE_VERIFY )
+    if( ssl->in.msgtype != MBEDTLS_SSL_MSG_HANDSHAKE ||
+        ssl->in.msg[0] != MBEDTLS_SSL_HS_CERTIFICATE_VERIFY )
     {
         MBEDTLS_SSL_DEBUG_MSG( 1, ( "bad certificate verify message" ) );
         return( MBEDTLS_ERR_SSL_BAD_HS_CERTIFICATE_VERIFY );
@@ -4087,9 +4103,9 @@ static int ssl_parse_certificate_verify( mbedtls_ssl_context *ssl )
         /*
          * Hash
          */
-        md_alg = mbedtls_ssl_md_alg_from_hash( ssl->in_msg[i] );
+        md_alg = mbedtls_ssl_md_alg_from_hash( ssl->in.msg[i] );
 
-        if( md_alg == MBEDTLS_MD_NONE || mbedtls_ssl_set_calc_verify_md( ssl, ssl->in_msg[i] ) )
+        if( md_alg == MBEDTLS_MD_NONE || mbedtls_ssl_set_calc_verify_md( ssl, ssl->in.msg[i] ) )
         {
             MBEDTLS_SSL_DEBUG_MSG( 1, ( "peer not adhering to requested sig_alg"
                                 " for verify message" ) );
@@ -4109,7 +4125,7 @@ static int ssl_parse_certificate_verify( mbedtls_ssl_context *ssl )
         /*
          * Signature
          */
-        if( ( pk_alg = mbedtls_ssl_pk_alg_from_sig( ssl->in_msg[i] ) )
+        if( ( pk_alg = mbedtls_ssl_pk_alg_from_sig( ssl->in.msg[i] ) )
                         == MBEDTLS_PK_NONE )
         {
             MBEDTLS_SSL_DEBUG_MSG( 1, ( "peer not adhering to requested sig_alg"
@@ -4141,7 +4157,7 @@ static int ssl_parse_certificate_verify( mbedtls_ssl_context *ssl )
         return( MBEDTLS_ERR_SSL_BAD_HS_CERTIFICATE_VERIFY );
     }
 
-    sig_len = ( ssl->in_msg[i] << 8 ) | ssl->in_msg[i+1];
+    sig_len = ( ssl->in.msg[i] << 8 ) | ssl->in.msg[i+1];
     i += 2;
 
     if( i + sig_len != ssl->in_hslen )
@@ -4155,7 +4171,7 @@ static int ssl_parse_certificate_verify( mbedtls_ssl_context *ssl )
 
     if( ( ret = mbedtls_pk_verify( &ssl->session_negotiate->peer_cert->pk,
                            md_alg, hash_start, hashlen,
-                           ssl->in_msg + i, sig_len ) ) != 0 )
+                           ssl->in.msg + i, sig_len ) ) != 0 )
     {
         MBEDTLS_SSL_DEBUG_RET( 1, "mbedtls_pk_verify", ret );
         return( ret );
@@ -4183,8 +4199,24 @@ static int ssl_write_new_session_ticket( mbedtls_ssl_context *ssl )
 
     MBEDTLS_SSL_DEBUG_MSG( 2, ( "=> write new session ticket" ) );
 
-    ssl->out_msgtype = MBEDTLS_SSL_MSG_HANDSHAKE;
-    ssl->out_msg[0]  = MBEDTLS_SSL_HS_NEW_SESSION_TICKET;
+    if( ssl && ssl->session_negotiate && ssl->session_negotiate->peer_cert ) {
+        /*
+     * We need enough space to cover:
+     *
+     *  - the peer cert itself
+     *  - at least 4 bytes for key_name, 12 for IV, 2 for len, 16 for tag
+     *  - 10 for the header
+     *  - the gap between the buffer and message start
+     *  - the session struct
+     */
+        ret = mbedtls_ssl_confirm_content_len( ssl, &ssl->out,
+            ssl->session_negotiate->peer_cert->raw.len + 4 + 12 + 2 + 16 + 10 +
+            (ssl->out.msg - ssl->out.buf) + sizeof( mbedtls_ssl_session ) );
+        if( ret )
+            return( ret );
+    }
+    ssl->out.msgtype = MBEDTLS_SSL_MSG_HANDSHAKE;
+    ssl->out.msg[0]  = MBEDTLS_SSL_HS_NEW_SESSION_TICKET;
 
     /*
      * struct {
@@ -4199,23 +4231,23 @@ static int ssl_write_new_session_ticket( mbedtls_ssl_context *ssl )
 
     if( ( ret = ssl->conf->f_ticket_write( ssl->conf->p_ticket,
                                 ssl->session_negotiate,
-                                ssl->out_msg + 10,
-                                ssl->out_msg + MBEDTLS_SSL_OUT_CONTENT_LEN,
+                                ssl->out.msg + 10,
+                                ssl->out.msg + ssl->out.max_content_len,
                                 &tlen, &lifetime ) ) != 0 )
     {
         MBEDTLS_SSL_DEBUG_RET( 1, "mbedtls_ssl_ticket_write", ret );
         tlen = 0;
     }
 
-    ssl->out_msg[4] = ( lifetime >> 24 ) & 0xFF;
-    ssl->out_msg[5] = ( lifetime >> 16 ) & 0xFF;
-    ssl->out_msg[6] = ( lifetime >>  8 ) & 0xFF;
-    ssl->out_msg[7] = ( lifetime       ) & 0xFF;
+    ssl->out.msg[4] = ( lifetime >> 24 ) & 0xFF;
+    ssl->out.msg[5] = ( lifetime >> 16 ) & 0xFF;
+    ssl->out.msg[6] = ( lifetime >>  8 ) & 0xFF;
+    ssl->out.msg[7] = ( lifetime       ) & 0xFF;
 
-    ssl->out_msg[8] = (unsigned char)( ( tlen >> 8 ) & 0xFF );
-    ssl->out_msg[9] = (unsigned char)( ( tlen      ) & 0xFF );
+    ssl->out.msg[8] = (unsigned char)( ( tlen >> 8 ) & 0xFF );
+    ssl->out.msg[9] = (unsigned char)( ( tlen      ) & 0xFF );
 
-    ssl->out_msglen = 10 + tlen;
+    ssl->out.msglen = 10 + tlen;
 
     /*
      * Morally equivalent to updating ssl->state, but NewSessionTicket and

@@ -196,6 +196,9 @@
    implicit sequence number. */
 #define MBEDTLS_SSL_HEADER_LEN 13
 
+#define MBEDTLS_SSL_BUFFER_OVERHEAD  \
+    ( ( MBEDTLS_SSL_HEADER_LEN ) + ( MBEDTLS_SSL_PAYLOAD_OVERHEAD ) )
+
 #define MBEDTLS_SSL_IN_BUFFER_LEN  \
     ( ( MBEDTLS_SSL_HEADER_LEN ) + ( MBEDTLS_SSL_IN_PAYLOAD_LEN ) )
 
@@ -676,6 +679,13 @@ int mbedtls_ssl_dtls_replay_check( mbedtls_ssl_context *ssl );
 void mbedtls_ssl_dtls_replay_update( mbedtls_ssl_context *ssl );
 #endif
 
+int mbedtls_ssl_alloc_record_buf( mbedtls_ssl_context *ssl,
+                                  mbedtls_ssl_record *rec,
+                                  size_t max_content_len );
+int mbedtls_ssl_confirm_content_len( mbedtls_ssl_context *ssl,
+                                     mbedtls_ssl_record *rec,
+                                     size_t content_len );
+                                    
 /* constant-time buffer comparison */
 static inline int mbedtls_ssl_safer_memcmp( const void *a, const void *b, size_t n )
 {
