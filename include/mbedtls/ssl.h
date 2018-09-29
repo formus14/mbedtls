@@ -219,6 +219,18 @@
 #define MBEDTLS_SSL_DEFAULT_TICKET_LIFETIME     86400 /**< Lifetime of session tickets (if enabled) */
 #endif
 
+#if defined(MBEDTLS_SSL_USE_DYNAMIC_BUF)
+    /*
+     * The default minimum allocation for fragment buffers.
+     * Making it larger trades off memory against the number of
+     * reallocations needed to make it big enough for cases where
+     * it needs to be bigger
+     */
+    #if !defined(MBEDTLS_SSL_BUFFER_MIN)
+    #define MBEDTLS_SSL_BUFFER_MIN 512
+    #endif
+#endif
+
 /*
  * Maximum fragment length in bytes,
  * determines the size of each of the two internal I/O buffers.
@@ -229,17 +241,21 @@
  * both sides of the connection and have it reduced at both sides, or
  * if you're using the Max Fragment Length extension and you know all your
  * peers are using it too!
+ *
+ * If you define MBEDTLS_SSL_USE_DYNAMIC_BUF and set this to less than 16384, mbedTLS will initially size the
+ * buffers to the value given, and if it finds something larger is
+ * necessary, it will reallocate the buffer.  This involves a memcpy.
  */
 #if !defined(MBEDTLS_SSL_MAX_CONTENT_LEN)
 #define MBEDTLS_SSL_MAX_CONTENT_LEN         16384   /**< Size of the input / output buffer */
 #endif
 
 #if !defined(MBEDTLS_SSL_IN_CONTENT_LEN)
-#define MBEDTLS_SSL_IN_CONTENT_LEN MBEDTLS_SSL_MAX_CONTENT_LEN
+    #define MBEDTLS_SSL_IN_CONTENT_LEN MBEDTLS_SSL_MAX_CONTENT_LEN
 #endif
 
 #if !defined(MBEDTLS_SSL_OUT_CONTENT_LEN)
-#define MBEDTLS_SSL_OUT_CONTENT_LEN MBEDTLS_SSL_MAX_CONTENT_LEN
+    #define MBEDTLS_SSL_OUT_CONTENT_LEN MBEDTLS_SSL_MAX_CONTENT_LEN
 #endif
 
 /* \} name SECTION: Module settings */
@@ -1008,7 +1024,6 @@ struct mbedtls_ssl_config
 #endif
 };
 
-
 struct mbedtls_ssl_context
 {
     const mbedtls_ssl_config *conf; /*!< configuration information          */
@@ -1080,7 +1095,13 @@ struct mbedtls_ssl_context
 
     int in_msgtype;             /*!< record header: message type      */
     size_t in_msglen;           /*!< record header: message length    */
-    size_t in_left;             /*!< amount of data read so far       */
+    size_t in_left; /*!< amount of data read so far       */
+#if defined(MBEDTLS_SSL_USE_DYNAMIC_BUF)
+    size_t in_max_content_len;	/*!< allocated size of .buf, minus
+                                    MBEDTLS_SSL_PAYLOAD_OVERHEAD */
+#else
+    const size_t in_max_content_len;
+#endif
 #if defined(MBEDTLS_SSL_PROTO_DTLS)
     uint16_t in_epoch;          /*!< DTLS epoch for incoming records  */
     size_t next_record_offset;  /*!< offset of the next record in datagram
@@ -1098,6 +1119,7 @@ struct mbedtls_ssl_context
     int keep_current_message;   /*!< drop or reuse current message
                                      on next call to record layer? */
 
+    
     /*
      * Record layer (outgoing data)
      */
@@ -1107,11 +1129,15 @@ struct mbedtls_ssl_context
     unsigned char *out_len;     /*!< two-bytes message length field   */
     unsigned char *out_iv;      /*!< ivlen-byte IV                    */
     unsigned char *out_msg;     /*!< message contents (out_iv+ivlen)  */
-
     int out_msgtype;            /*!< record header: message type      */
     size_t out_msglen;          /*!< record header: message length    */
     size_t out_left;            /*!< amount of data not yet written   */
-
+#if defined(MBEDTLS_SSL_USE_DYNAMIC_BUF)
+    size_t out_max_content_len;	/*!< allocated size of .buf, minus
+                                    MBEDTLS_SSL_PAYLOAD_OVERHEAD */
+#else
+    const size_t out_max_content_len;
+#endif
 #if defined(MBEDTLS_ZLIB_SUPPORT)
     unsigned char *compress_buf;        /*!<  zlib data buffer        */
 #endif

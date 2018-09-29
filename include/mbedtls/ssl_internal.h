@@ -201,6 +201,10 @@
 
 #define MBEDTLS_SSL_OUT_BUFFER_LEN  \
     ( ( MBEDTLS_SSL_HEADER_LEN ) + ( MBEDTLS_SSL_OUT_PAYLOAD_LEN ) )
+#if defined(MBEDTLS_SSL_USE_DYNAMIC_BUF)
+#define MBEDTLS_SSL_BUFFER_OVERHEAD  \
+    ( ( MBEDTLS_SSL_HEADER_LEN ) + ( MBEDTLS_SSL_PAYLOAD_OVERHEAD ) )
+#endif
 
 #ifdef MBEDTLS_ZLIB_SUPPORT
 /* Compression buffer holds both IN and OUT buffers, so should be size of the larger */
@@ -675,7 +679,14 @@ int mbedtls_ssl_resend( mbedtls_ssl_context *ssl );
 int mbedtls_ssl_dtls_replay_check( mbedtls_ssl_context *ssl );
 void mbedtls_ssl_dtls_replay_update( mbedtls_ssl_context *ssl );
 #endif
-
+#if defined(MBEDTLS_SSL_USE_DYNAMIC_BUF)
+int mbedtls_ssl_alloc_record_buf( mbedtls_ssl_context *ssl,
+                                  unsigned char *buf,
+                                  size_t max_content_len );
+int mbedtls_ssl_confirm_content_len( mbedtls_ssl_context *ssl,
+                                     unsigned char *buf,
+                                     size_t content_len );
+#endif
 /* constant-time buffer comparison */
 static inline int mbedtls_ssl_safer_memcmp( const void *a, const void *b, size_t n )
 {
